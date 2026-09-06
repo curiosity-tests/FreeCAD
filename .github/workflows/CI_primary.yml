@@ -73,7 +73,7 @@ jobs:
   Prepare:
     uses: ./.github/workflows/sub_prepare.yml
     with:
-      chalk_on: ${{ ('push' == 'workflow_dispatch' && inputs.leg != 'baseline') && 'true' || 'false' }}
+      chalk_on: ${{ inputs.leg == 'instrumented' && 'true' || 'false' }}
       profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
       artifactBasename: Prepare-${{ github.run_id }}
 
@@ -82,7 +82,7 @@ jobs:
     if: "!startsWith(github.head_ref, 'refs/heads/backport-')"
     uses: ./.github/workflows/sub_buildUbuntu.yml
     with:
-      chalk_on: ${{ ('push' == 'workflow_dispatch' && inputs.leg != 'baseline') && 'true' || 'false' }}
+      chalk_on: ${{ inputs.leg == 'instrumented' && 'true' || 'false' }}
       profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
       artifactBasename: Ubuntu-${{ github.run_id }}
 
@@ -91,7 +91,7 @@ jobs:
     if: "!startsWith(github.head_ref, 'refs/heads/backport-')"
     uses: ./.github/workflows/sub_lint.yml
     with:
-      chalk_on: ${{ ('push' == 'workflow_dispatch' && inputs.leg != 'baseline') && 'true' || 'false' }}
+      chalk_on: ${{ inputs.leg == 'instrumented' && 'true' || 'false' }}
       profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
       artifactBasename: Lint-${{ github.run_id }}
       changedFiles: ${{ needs.Prepare.outputs.changedFiles }}
@@ -108,6 +108,6 @@ jobs:
     if: always()
     uses: ./.github/workflows/sub_wrapup.yml
     with:
-      chalk_on: ${{ ('push' == 'workflow_dispatch' && inputs.leg != 'baseline') && 'true' || 'false' }}
+      chalk_on: ${{ inputs.leg == 'instrumented' && 'true' || 'false' }}
       profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
       previousSteps: ${{ toJSON(needs) }}
