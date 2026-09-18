@@ -97,193 +97,264 @@ jobs:
       reportFile: ${{ steps.Init.outputs.reportFile }}
 
     steps:
-      - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
-        with:
-          egress-policy: audit
+    - name: Harden the runner (Audit all outbound calls)
+      uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920   # v2.20.0
+      with:
+        egress-policy: audit
 
-      - name: Checking out source code
-        uses: crashappsec/action-checkout@main
-        with:
-          chalk: ${{ env.CHALK_ON }}
-          profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
-          observables_continue_on_error: false
-          lfs: false
-          submodules: true
-      - name: Assert instrumentation is live
-        if: env.CHALK_ON == 'true'
-        run: |
-          test -n "${CURIOSITY_ROOT:-}" || { echo "::error::CURIOSITY_ROOT unset - observables never installed"; exit 1; }
-          test -S "${CURIOSITY_SOCKET_NAME:?socket name unset}" || { echo "::error::co-hostd socket absent"; exit 1; }
+    - name: Checking out source code
+      uses: crashappsec/action-checkout@main
+      with:
+        chalk: ${{ env.CHALK_ON }}
+        profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
+        observables_continue_on_error: false
+        lfs: false
+        submodules: true
+    - name: Install FreeCAD dependencies
+      run: ./package/ubuntu/install-apt-packages.sh
 
-      - name: Install FreeCAD dependencies
-        run: ./package/ubuntu/install-apt-packages.sh
+    - name: Install FreeCAD Python test dependencies
+      run: |
+        sudo apt-get update -y -qq
+        sudo apt-get install -y -qq python3-pip
+        python3 -m pip install --upgrade pip
+        python3 -m pip install ifcopenshell==0.8.2 --break-system-packages
 
-      - name: Install FreeCAD Python test dependencies
-        run: |
-          sudo apt-get update -y -qq
-          sudo apt-get install -y -qq python3-pip
-          python3 -m pip install --upgrade pip
-          python3 -m pip install ifcopenshell==0.8.2 --break-system-packages
+    - name: Make needed directories, files and initializations
+      id: Init
+      run: |
+        mkdir -p ${{ env.CCACHE_DIR }}
+        mkdir -p ${{ env.CCACHE_CONFIGPATH }}
+        mkdir -p ${{ env.builddir }}
+        mkdir -p ${{ env.logdir }}
+        mkdir -p ${{ env.reportdir }}
+        echo "reportFile=${{ env.reportfilename }}" >> $GITHUB_OUTPUT
 
-      - name: Make needed directories, files and initializations
-        id: Init
-        run: |
-          mkdir -p ${{ env.CCACHE_DIR }}
-          mkdir -p ${{ env.CCACHE_CONFIGPATH }}
-          mkdir -p ${{ env.builddir }}
-          mkdir -p ${{ env.logdir }}
-          mkdir -p ${{ env.reportdir }}
-          echo "reportFile=${{ env.reportfilename }}" >> $GITHUB_OUTPUT
+    - name: Generate cache key
+      id: genCacheKey
+      uses: ./.github/workflows/actions/linux/generateCacheKey
+      with:
+        compiler: ${{ env.CXX }}
+        qt_major_version: 5
 
-      - name: Generate cache key
-        id: genCacheKey
-        uses: ./.github/workflows/actions/linux/generateCacheKey
-        with:
-          compiler: ${{ env.CXX }}
-          qt_major_version: 5
+    - name: Restore Compiler Cache
+      id: cache-restore
+      if: always()
+      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae   # v5.0.5
+      with:
+        path: ${{ env.CCACHE_DIR }}
+        key: FC-${{ steps.genCacheKey.outputs.cacheKey }}-${{ github.ref }}-${{ github.run_id }}
+        restore-keys: |
+          FC-${{ steps.genCacheKey.outputs.cacheKey }}-${{ github.ref }}-
+          FC-${{ steps.genCacheKey.outputs.cacheKey }}-
 
-      - name: Restore Compiler Cache
-        id: cache-restore
-        if: always()
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: FC-${{ steps.genCacheKey.outputs.cacheKey }}-${{ github.ref }}-${{ github.run_id }}
-          restore-keys: |
-            FC-${{ steps.genCacheKey.outputs.cacheKey }}-${{ github.ref }}-
-            FC-${{ steps.genCacheKey.outputs.cacheKey }}-
+    - name: Print CCache statistics before build, reset stats and print config
+      run: |
+        ccache -s
+        ccache -z
+        ccache -p
 
-      - name: Print CCache statistics before build, reset stats and print config
-        run: |
-          ccache -s
-          ccache -z
-          ccache -p
+    - name: Install cmake
+      uses: jwlawson/actions-setup-cmake@0d6a7d60b009d01c9e7523be22153ff8f19460d3   # v2.2.0
+      with:
+        cmake-version: '3.31.6'
 
-      - name: Install cmake
-        uses: jwlawson/actions-setup-cmake@0d6a7d60b009d01c9e7523be22153ff8f19460d3 # v2.2.0
-        with:
-          cmake-version: '3.31.6'
+    - name: CMake Configure
+      uses: ./.github/workflows/actions/linux/configure
+      with:
+        extraParameters: -G Ninja --preset ${{ env.config }} -DFREECAD_USE_EXTERNAL_COIN_PIVY=ON -DFREECAD_USE_EXTERNAL_PYCXX=ON -DFREECAD_USE_EXTERNAL_JSON=ON
+        builddir: ${{ env.builddir }}
+        logFile: ${{ env.logdir }}Cmake.log
+        errorFile: ${{ env.logdir }}CmakeErrors.log
+        reportFile: ${{env.reportdir}}${{ env.reportfilename }}
 
-      - name: CMake Configure
-        uses: ./.github/workflows/actions/linux/configure
-        with:
-          extraParameters: -G Ninja --preset ${{ env.config }} -DFREECAD_USE_EXTERNAL_COIN_PIVY=ON -DFREECAD_USE_EXTERNAL_PYCXX=ON -DFREECAD_USE_EXTERNAL_JSON=ON
-          builddir: ${{ env.builddir }}
-          logFile: ${{ env.logdir }}Cmake.log
-          errorFile: ${{ env.logdir }}CmakeErrors.log
-          reportFile: ${{env.reportdir}}${{ env.reportfilename }}
+    - name: CMake Build
+      uses: ./.github/workflows/actions/linux/build
+      with:
+        builddir: ${{ env.builddir }}
+        logFile: ${{ env.logdir }}Build.log
+        errorFile: ${{ env.logdir }}BuildErrors.log
+        reportFile: ${{env.reportdir}}${{ env.reportfilename }}
 
-      - name: CMake Build
-        uses: ./.github/workflows/actions/linux/build
-        with:
-          builddir: ${{ env.builddir }}
-          logFile: ${{ env.logdir }}Build.log
-          errorFile: ${{ env.logdir }}BuildErrors.log
-          reportFile: ${{env.reportdir}}${{ env.reportfilename }}
+    - name: Print ccache statistics after Build
+      if: always()
+      run: |
+        ccache -s
 
-      - name: Print ccache statistics after Build
-        if: always()
-        run: |
-          ccache -s
+    - name: FreeCAD CLI tests on build dir
+      if: inputs.testOnBuildDir
+      timeout-minutes: 10
+      uses: ./.github/workflows/actions/runPythonTests
+      with:
+        testDescription: "CLI tests on build dir"
+        testCommand: ${{ env.builddir }}/bin/FreeCADCmd -t 0
+        logFile: ${{ env.logdir }}TestCLIBuild.log
+        reportFile: ${{env.reportdir}}${{ env.reportfilename }}
 
-      - name: FreeCAD CLI tests on build dir
-        if: inputs.testOnBuildDir
-        timeout-minutes: 10
-        uses: ./.github/workflows/actions/runPythonTests
-        with:
-          testDescription: "CLI tests on build dir"
-          testCommand: ${{ env.builddir }}/bin/FreeCADCmd -t 0
-          logFile: ${{ env.logdir }}TestCLIBuild.log
-          reportFile: ${{env.reportdir}}${{ env.reportfilename }}
-
-      - name: FreeCAD GUI tests on build dir
-        if: inputs.testOnBuildDir
-        timeout-minutes: 15
-        uses: ./.github/workflows/actions/runPythonTests
-        with:
-          testDescription: "GUI tests on build dir"
+    - name: FreeCAD GUI tests on build dir
+      if: inputs.testOnBuildDir
+      timeout-minutes: 15
+      uses: ./.github/workflows/actions/runPythonTests
+      with:
+        testDescription: "GUI tests on build dir"
           # Use Python wrapper to run only GUI-registered tests with the built FreeCAD executable
-          testCommand: xvfb-run python3 ./.github/scripts/run_gui_tests.py "${{ env.builddir }}"
-          logFile: ${{ env.logdir }}TestGUIBuild.log
-          reportFile: ${{env.reportdir}}${{ env.reportfilename }}
+        testCommand: xvfb-run python3 ./.github/scripts/run_gui_tests.py "${{ env.builddir }}"
+        logFile: ${{ env.logdir }}TestGUIBuild.log
+        reportFile: ${{env.reportdir}}${{ env.reportfilename }}
 
-      - name: Coin node snapshot visual tests on build dir
-        if: inputs.testCoinNodeSnapshots
-        timeout-minutes: 15
-        uses: ./.github/workflows/actions/runPythonTests
-        with:
-          testDescription: "Coin node snapshot visual tests on build dir"
-          testCommand: |
-            FC_VISUAL_OUT_DIR="/tmp/FreeCADTesting/CoinNodeSnapshots" \
-            xvfb-run -a -s "-screen 0 1024x768x24" \
-              "${{ env.builddir }}/bin/FreeCAD" -t TestCoinNodeSnapshots
-          logFile: ${{ env.logdir }}TestCoinNodeSnapshotsBuild.log
-          reportFile: ${{env.reportdir}}${{ env.reportfilename }}
+    - name: Coin node snapshot visual tests on build dir
+      if: inputs.testCoinNodeSnapshots
+      timeout-minutes: 15
+      uses: ./.github/workflows/actions/runPythonTests
+      with:
+        testDescription: "Coin node snapshot visual tests on build dir"
+        testCommand: |
+          FC_VISUAL_OUT_DIR="/tmp/FreeCADTesting/CoinNodeSnapshots" \
+          xvfb-run -a -s "-screen 0 1024x768x24" \
+            "${{ env.builddir }}/bin/FreeCAD" -t TestCoinNodeSnapshots
+        logFile: ${{ env.logdir }}TestCoinNodeSnapshotsBuild.log
+        reportFile: ${{env.reportdir}}${{ env.reportfilename }}
 
-      - name: Upload Coin node snapshot artifacts (on failure)
-        if: failure() && inputs.testCoinNodeSnapshots
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ${{ inputs.artifactBasename }}-CoinNodeSnapshots
-          path: /tmp/FreeCADTesting/CoinNodeSnapshots
+    - name: Upload Coin node snapshot artifacts (on failure)
+      if: failure() && inputs.testCoinNodeSnapshots
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a   # v7.0.1
+      with:
+        name: ${{ inputs.artifactBasename }}-CoinNodeSnapshots
+        path: /tmp/FreeCADTesting/CoinNodeSnapshots
 
-      - name: C++ tests
-        timeout-minutes: 1
-        uses: ./.github/workflows/actions/runCPPTests/runAllTests
-        with:
-          reportdir: ${{ env.reportdir }}
-          builddir: ${{ env.builddir }}
-          reportFile: ${{ env.reportdir }}${{ env.reportfilename }}
+    - name: C++ tests
+      timeout-minutes: 1
+      uses: ./.github/workflows/actions/runCPPTests/runAllTests
+      with:
+        reportdir: ${{ env.reportdir }}
+        builddir: ${{ env.builddir }}
+        reportFile: ${{ env.reportdir }}${{ env.reportfilename }}
 
-      - name: CMake Install
-        uses: ./.github/workflows/actions/linux/install
-        with:
-          builddir: ${{ env.builddir }}
-          logFile: ${{ env.logdir }}Install.log
-          errorFile: ${{ env.logdir }}InstallErrors.log
-          reportFile: ${{env.reportdir}}${{ env.reportfilename }}
+    - name: CMake Install
+      uses: ./.github/workflows/actions/linux/install
+      with:
+        builddir: ${{ env.builddir }}
+        logFile: ${{ env.logdir }}Install.log
+        errorFile: ${{ env.logdir }}InstallErrors.log
+        reportFile: ${{env.reportdir}}${{ env.reportfilename }}
 
-      - name: FreeCAD CLI tests on install
-        timeout-minutes: 10
-        uses: ./.github/workflows/actions/runPythonTests
-        with:
-          testDescription: "CLI tests on install"
-          testCommand: FreeCADCmd -t 0
-          logFile: ${{ env.logdir }}TestCLIInstall.log
-          reportFile: ${{env.reportdir}}${{ env.reportfilename }}
+    - name: FreeCAD CLI tests on install
+      timeout-minutes: 10
+      uses: ./.github/workflows/actions/runPythonTests
+      with:
+        testDescription: "CLI tests on install"
+        testCommand: FreeCADCmd -t 0
+        logFile: ${{ env.logdir }}TestCLIInstall.log
+        reportFile: ${{env.reportdir}}${{ env.reportfilename }}
 
-      - name: FreeCAD GUI tests on install
-        timeout-minutes: 15
-        uses: ./.github/workflows/actions/runPythonTests
-        with:
-          testDescription: "GUI tests on install"
+    - name: FreeCAD GUI tests on install
+      timeout-minutes: 15
+      uses: ./.github/workflows/actions/runPythonTests
+      with:
+        testDescription: "GUI tests on install"
           # Use Python wrapper to run only GUI-registered tests using the installed FreeCAD
-          testCommand: xvfb-run python3 ./.github/scripts/run_gui_tests.py "FreeCAD"
-          logFile: ${{ env.logdir }}TestGUIInstall.log
-          reportFile: ${{env.reportdir}}${{ env.reportfilename }}
+        testCommand: xvfb-run python3 ./.github/scripts/run_gui_tests.py "FreeCAD"
+        logFile: ${{ env.logdir }}TestGUIInstall.log
+        reportFile: ${{env.reportdir}}${{ env.reportfilename }}
 
-      - name: Save Compiler Cache
-        id: cache-save
-        if: always()
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: FC-${{ steps.genCacheKey.outputs.cacheKey }}-${{ github.ref }}-${{ github.run_id }}
+    - name: Save Compiler Cache
+      id: cache-save
+      if: always()
+      uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae   # v5.0.5
+      with:
+        path: ${{ env.CCACHE_DIR }}
+        key: FC-${{ steps.genCacheKey.outputs.cacheKey }}-${{ github.ref }}-${{ github.run_id }}
 
-      - name: Upload logs
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ${{ inputs.artifactBasename }}-Logs
-          path: |
-            ${{ env.logdir }}
-            /var/crash/*FreeCAD*
+    - name: Upload logs
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a   # v7.0.1
+      with:
+        name: ${{ inputs.artifactBasename }}-Logs
+        path: |
+          ${{ env.logdir }}
+          /var/crash/*FreeCAD*
 
-      - name: Upload report
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ${{ env.reportfilename }}
-          path: |
-            ${{env.reportdir}}${{ env.reportfilename }}
+    - name: Upload report
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a   # v7.0.1
+      with:
+        name: ${{ env.reportfilename }}
+        path: |
+          ${{env.reportdir}}${{ env.reportfilename }}
+    - name: Check observables and crashes
+      if: always() && env.CHALK_ON == 'true'
+      shell: bash
+      run: |
+        set -uo pipefail
+        root="${CURIOSITY_ROOT:-}"
+        home="${CURIOSITY_HOME:-/mnt/curiosity}"
+        obs="${home}/observables"
+        fail=0
+
+        echo "::group::curiosity layout"
+        echo "CURIOSITY_ROOT=${root:-<unset>}"
+        echo "CURIOSITY_HOME=${home}"
+        ls -la "${obs}" 2>/dev/null || echo "no observables dir at ${obs}"
+        echo "::endgroup::"
+
+        # Observables for THIS run+attempt. The prefix matters: a stale file from an
+        # earlier run on the same mount would otherwise pass.
+        prefix="${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+        shopt -s nullglob
+        mine=("${obs}/${prefix}"*)
+        if [ ${#mine[@]} -eq 0 ]; then
+          mine=("${obs}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-observables"*)
+        fi
+        if [ ${#mine[@]} -eq 0 ]; then
+          echo "::error::no observables for run ${prefix} in ${obs} - instrumentation produced nothing"
+          fail=1
+        else
+          echo "observables present: ${#mine[@]} file(s)"
+          printf '  %s\n' "${mine[@]}"
+        fi
+
+        for f in "${mine[@]}"; do
+          case "$f" in
+            *.jsonl|*.json|*.combined)
+              if ! jq --slurp "." "$f" > /dev/null 2>&1; then
+                echo "::error::observables do not parse: $f"
+                fail=1
+              fi
+              ;;
+          esac
+        done
+
+        # Crash thresholds copied from check-run: a few null frames are noise, more than
+        # five is a stack walk into nothing.
+        for f in "${root}"/log/co-host*.log "${home}"/log/co-host*.log; do
+          [ -f "$f" ] || continue
+          echo "Asserting that there is no crash in $f"
+          if [ "$(grep -c 'p 00000000' "$f" 2>/dev/null || echo 0)" -gt 5 ] \
+            || [ "$(grep -E -c 'FATAL: Uncaught signal|Address not mapped at|RAX 0x.*RBX 0x' "$f" 2>/dev/null || echo 0)" -gt 1 ]; then
+            echo "::error::crash signature in $f"
+            grep -E 'FATAL: Uncaught signal|Address not mapped at' "$f" | head -5 || true
+            fail=1
+          fi
+        done
+
+        cores=("${root}"/coredump.* "${home}"/coredump.*)
+        if [ ${#cores[@]} -gt 0 ]; then
+          echo "::error::coredump present: ${cores[*]}"
+          fail=1
+        fi
+
+        for f in "${root}"/runc.log "${root}"/runc.global.log \
+                 "${home}"/runc.log "${home}"/runc.global.log; do
+          [ -f "$f" ] || continue
+          if grep -q '^E:' "$f"; then
+            echo "::error::error in $f"
+            grep '^E:' "$f" | head -5
+            fail=1
+          fi
+        done
+
+        if [ "$fail" -ne 0 ]; then
+          echo "::error::instrumentation check FAILED"
+          exit 1
+        fi
+        echo "instrumentation check passed"

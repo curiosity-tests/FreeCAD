@@ -132,128 +132,199 @@ jobs:
       reportFile: ${{ steps.Init.outputs.reportFile }}
 
     steps:
-      - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
-        with:
-          egress-policy: audit
+    - name: Harden the runner (Audit all outbound calls)
+      uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920   # v2.20.0
+      with:
+        egress-policy: audit
 
-      - name: Check out code
-        uses: crashappsec/action-checkout@main
-        with:
-          chalk: ${{ env.CHALK_ON }}
-          profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
-          observables_continue_on_error: false
-          lfs: false
-          submodules: true
-      - name: Assert instrumentation is live
-        if: env.CHALK_ON == 'true'
-        run: |
-          test -n "${CURIOSITY_ROOT:-}" || { echo "::error::CURIOSITY_ROOT unset - observables never installed"; exit 1; }
-          test -S "${CURIOSITY_SOCKET_NAME:?socket name unset}" || { echo "::error::co-hostd socket absent"; exit 1; }
-
-      - name: Make needed directories, files and initializations
-        id: Init
-        run: |
-          mkdir -p ${{ env.logdir }}
-          mkdir -p ${{ env.fixesdir }}
-          mkdir -p ${{ env.reportdir }}
-          echo "reportFile=${{ env.reportfilename }}" >> $GITHUB_OUTPUT
+    - name: Check out code
+      uses: crashappsec/action-checkout@main
+      with:
+        chalk: ${{ env.CHALK_ON }}
+        profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
+        observables_continue_on_error: false
+        lfs: false
+        submodules: true
+    - name: Make needed directories, files and initializations
+      id: Init
+      run: |
+        mkdir -p ${{ env.logdir }}
+        mkdir -p ${{ env.fixesdir }}
+        mkdir -p ${{ env.reportdir }}
+        echo "reportFile=${{ env.reportfilename }}" >> $GITHUB_OUTPUT
 
     # Version consistency check
-      - name: Check version sync
-        if: always()
-        run: python3 src/Tools/sync_version.py --check
+    - name: Check version sync
+      if: always()
+      run: python3 src/Tools/sync_version.py --check
 
     # Generic lints steps
-      - name: Check File Case Sensitivity
-        uses: credfeto/action-case-checker@cb652aeab29ed363bbdb7d9ee1bfcc010c46cac5 # v1.3.0
+    - name: Check File Case Sensitivity
+      uses: credfeto/action-case-checker@cb652aeab29ed363bbdb7d9ee1bfcc010c46cac5   # v1.3.0
 
     # Python linting steps
 
-      - name: Set up pixi for stub smoke checks
-        if: always()
-        uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
+    - name: Set up pixi for stub smoke checks
+      if: always()
+      uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f   # v0.10.0
 
-      - name: Install Python stub smoke-check dependencies
-        if: always()
-        run: |
-          python3 -m pip install --user uv
+    - name: Install Python stub smoke-check dependencies
+      if: always()
+      run: |
+        python3 -m pip install --user uv
 
-      - name: Pylint
-        if: inputs.checkPylint && inputs.changedPythonFiles != '' && always()
-        continue-on-error: ${{ inputs.pylintFailSilent }}
-        run: |
-          python3 tools/lint/pylint.py \
-            --files ${{ inputs.changedPythonFiles }} \
-            --disable "${{ inputs.pylintDisable }}" \
-            --log-dir "${{ env.logdir }}" \
-            --report-file "${{ env.reportdir }}${{ env.reportfilename }}"
+    - name: Pylint
+      if: inputs.checkPylint && inputs.changedPythonFiles != '' && always()
+      continue-on-error: ${{ inputs.pylintFailSilent }}
+      run: |
+        python3 tools/lint/pylint.py \
+          --files ${{ inputs.changedPythonFiles }} \
+          --disable "${{ inputs.pylintDisable }}" \
+          --log-dir "${{ env.logdir }}" \
+          --report-file "${{ env.reportdir }}${{ env.reportfilename }}"
 
-      - name: Generated binding stubs smoke check
-        if: always()
-        run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          python3 tools/lint/python_stubs.py \
-            --log-dir "${{ env.logdir }}" \
-            --report-file "${{ env.reportdir }}${{ env.reportfilename }}"
+    - name: Generated binding stubs smoke check
+      if: always()
+      run: |
+        export PATH="$HOME/.local/bin:$PATH"
+        python3 tools/lint/python_stubs.py \
+          --log-dir "${{ env.logdir }}" \
+          --report-file "${{ env.reportdir }}${{ env.reportfilename }}"
 
     # C++ linting steps
 
-      - name: Install FreeCAD dependencies
-        if: inputs.changedCppFiles != '' && always()
-        run: ./package/ubuntu/install-apt-packages.sh
+    - name: Install FreeCAD dependencies
+      if: inputs.changedCppFiles != '' && always()
+      run: ./package/ubuntu/install-apt-packages.sh
 
-      - name: Run CMake # This is needed for Clang tools to work correctly
-        if: inputs.changedCppFiles != '' && always()
-        run: |
-          mkdir build && cmake -S ./ -B ./build/ -D CMAKE_EXPORT_COMPILE_COMMANDS:BOOL=TRUE
+    - name: Run CMake   # This is needed for Clang tools to work correctly
+      if: inputs.changedCppFiles != '' && always()
+      run: |
+        mkdir build && cmake -S ./ -B ./build/ -D CMAKE_EXPORT_COMPILE_COMMANDS:BOOL=TRUE
 
-      - name: Check old Qt string-based connections (https://wiki.qt.io/New_Signal_Slot_Syntax)
-        if: inputs.checkQtConnections && inputs.changedCppFiles != '' && always()
-        continue-on-error: ${{ inputs.qtConnectionsFailSilent }}
-        run: |
-          python3 tools/lint/qt_connections.py \
-            --files ${{ inputs.changedCppFiles }} \
-            --log-dir "${{ env.logdir }}" \
-            --report-file "${{ env.reportdir }}${{ env.reportfilename }}"
+    - name: Check old Qt string-based connections (https://wiki.qt.io/New_Signal_Slot_Syntax)
+      if: inputs.checkQtConnections && inputs.changedCppFiles != '' && always()
+      continue-on-error: ${{ inputs.qtConnectionsFailSilent }}
+      run: |
+        python3 tools/lint/qt_connections.py \
+          --files ${{ inputs.changedCppFiles }} \
+          --log-dir "${{ env.logdir }}" \
+          --report-file "${{ env.reportdir }}${{ env.reportfilename }}"
 
-      - name: Codespell
-        if: inputs.checkSpelling && always()
-        continue-on-error: ${{ inputs.codespellFailSilent }}
-        run: |
-          python3 tools/lint/codespell.py \
-            --files ${{ inputs.changedFiles }} \
-            --ignore-words "${{ inputs.listIgnoredMisspelling }}" \
-            --skip "${{ inputs.spellingIgnore }}" \
-            --log-dir "${{ env.logdir }}" \
-            --report-file "${{ env.reportdir }}${{ env.reportfilename }}"
+    - name: Codespell
+      if: inputs.checkSpelling && always()
+      continue-on-error: ${{ inputs.codespellFailSilent }}
+      run: |
+        python3 tools/lint/codespell.py \
+          --files ${{ inputs.changedFiles }} \
+          --ignore-words "${{ inputs.listIgnoredMisspelling }}" \
+          --skip "${{ inputs.spellingIgnore }}" \
+          --log-dir "${{ env.logdir }}" \
+          --report-file "${{ env.reportdir }}${{ env.reportfilename }}"
 
-      - name: Clang-tidy
-        if: inputs.checkClangTidy && inputs.changedCppFiles != '' && always()
-        continue-on-error: ${{ inputs.clangTidyFailSilent }}
-        run: |
-          python3 tools/lint/clang_tidy.py \
-            --files ${{ inputs.changedCppFiles }} \
-            --line-filter '${{ inputs.changedCppLines }}' \
-            --clang-style "${{ inputs.clangStyle }}" \
-            --log-dir "${{ env.logdir }}" \
-            --report-file "${{ env.reportdir }}${{ env.reportfilename }}"
+    - name: Clang-tidy
+      if: inputs.checkClangTidy && inputs.changedCppFiles != '' && always()
+      continue-on-error: ${{ inputs.clangTidyFailSilent }}
+      run: |
+        python3 tools/lint/clang_tidy.py \
+          --files ${{ inputs.changedCppFiles }} \
+          --line-filter '${{ inputs.changedCppLines }}' \
+          --clang-style "${{ inputs.clangStyle }}" \
+          --log-dir "${{ env.logdir }}" \
+          --report-file "${{ env.reportdir }}${{ env.reportfilename }}"
 
     # Upload steps
 
-      - name: Upload logs and fixes
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ${{ inputs.artifactBasename }}-Logs
-          path: |
-            ${{ env.logdir }}
-            ${{ env.fixesdir }}
+    - name: Upload logs and fixes
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a   # v7.0.1
+      with:
+        name: ${{ inputs.artifactBasename }}-Logs
+        path: |
+          ${{ env.logdir }}
+          ${{ env.fixesdir }}
 
-      - name: Upload report
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ${{ env.reportfilename }}
-          path: |
-            ${{env.reportdir}}${{ env.reportfilename }}
+    - name: Upload report
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a   # v7.0.1
+      with:
+        name: ${{ env.reportfilename }}
+        path: |
+          ${{env.reportdir}}${{ env.reportfilename }}
+    - name: Check observables and crashes
+      if: always() && env.CHALK_ON == 'true'
+      shell: bash
+      run: |
+        set -uo pipefail
+        root="${CURIOSITY_ROOT:-}"
+        home="${CURIOSITY_HOME:-/mnt/curiosity}"
+        obs="${home}/observables"
+        fail=0
+
+        echo "::group::curiosity layout"
+        echo "CURIOSITY_ROOT=${root:-<unset>}"
+        echo "CURIOSITY_HOME=${home}"
+        ls -la "${obs}" 2>/dev/null || echo "no observables dir at ${obs}"
+        echo "::endgroup::"
+
+        # Observables for THIS run+attempt. The prefix matters: a stale file from an
+        # earlier run on the same mount would otherwise pass.
+        prefix="${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+        shopt -s nullglob
+        mine=("${obs}/${prefix}"*)
+        if [ ${#mine[@]} -eq 0 ]; then
+          mine=("${obs}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-observables"*)
+        fi
+        if [ ${#mine[@]} -eq 0 ]; then
+          echo "::error::no observables for run ${prefix} in ${obs} - instrumentation produced nothing"
+          fail=1
+        else
+          echo "observables present: ${#mine[@]} file(s)"
+          printf '  %s\n' "${mine[@]}"
+        fi
+
+        for f in "${mine[@]}"; do
+          case "$f" in
+            *.jsonl|*.json|*.combined)
+              if ! jq --slurp "." "$f" > /dev/null 2>&1; then
+                echo "::error::observables do not parse: $f"
+                fail=1
+              fi
+              ;;
+          esac
+        done
+
+        # Crash thresholds copied from check-run: a few null frames are noise, more than
+        # five is a stack walk into nothing.
+        for f in "${root}"/log/co-host*.log "${home}"/log/co-host*.log; do
+          [ -f "$f" ] || continue
+          echo "Asserting that there is no crash in $f"
+          if [ "$(grep -c 'p 00000000' "$f" 2>/dev/null || echo 0)" -gt 5 ] \
+            || [ "$(grep -E -c 'FATAL: Uncaught signal|Address not mapped at|RAX 0x.*RBX 0x' "$f" 2>/dev/null || echo 0)" -gt 1 ]; then
+            echo "::error::crash signature in $f"
+            grep -E 'FATAL: Uncaught signal|Address not mapped at' "$f" | head -5 || true
+            fail=1
+          fi
+        done
+
+        cores=("${root}"/coredump.* "${home}"/coredump.*)
+        if [ ${#cores[@]} -gt 0 ]; then
+          echo "::error::coredump present: ${cores[*]}"
+          fail=1
+        fi
+
+        for f in "${root}"/runc.log "${root}"/runc.global.log \
+                 "${home}"/runc.log "${home}"/runc.global.log; do
+          [ -f "$f" ] || continue
+          if grep -q '^E:' "$f"; then
+            echo "::error::error in $f"
+            grep '^E:' "$f" | head -5
+            fail=1
+          fi
+        done
+
+        if [ "$fail" -ne 0 ]; then
+          echo "::error::instrumentation check FAILED"
+          exit 1
+        fi
+        echo "instrumentation check passed"

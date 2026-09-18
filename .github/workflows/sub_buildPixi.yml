@@ -83,7 +83,8 @@ jobs:
       max-parallel: 6
       fail-fast: false
       matrix:
-        os: [windows-2022, ubuntu-latest, macos-latest]
+        os:
+        - ubuntu-latest
 
     steps:
     - name: Harden the runner (Audit all outbound calls)

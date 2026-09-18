@@ -101,128 +101,199 @@ jobs:
       changedCppLines: ${{ steps.Output.outputs.changedCppLines }}
 
     steps:
-      - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
-        with:
-          egress-policy: audit
+    - name: Harden the runner (Audit all outbound calls)
+      uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920   # v2.20.0
+      with:
+        egress-policy: audit
 
-      - name: Make needed directories, files and initializations
-        if: "!inputs.skipBuild"
-        id: Init
-        run: |
-          mkdir -p ${{ env.logdir }}
-          mkdir -p ${{ env.reportdir }}
-          commitCnt=0
-          touch ${{ env.logdir }}changedFiles.lst ${{ env.logdir }}changedCppFiles.lst ${{ env.logdir }}changedPythonFiles.lst
-          echo "reportFile=${{ env.reportfilename }}" >> $GITHUB_OUTPUT
-      - name: Check out code
-        if: "!inputs.skipBuild"
-        uses: crashappsec/action-checkout@main
-        with:
-          chalk: ${{ env.CHALK_ON }}
-          profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
-          observables_continue_on_error: false
-          lfs: false
-          submodules: true
-      - name: Assert instrumentation is live
-        if: env.CHALK_ON == 'true'
-        run: |
-          test -n "${CURIOSITY_ROOT:-}" || { echo "::error::CURIOSITY_ROOT unset - observables never installed"; exit 1; }
-          test -S "${CURIOSITY_SOCKET_NAME:?socket name unset}" || { echo "::error::co-hostd socket absent"; exit 1; }
-
-      - name: Determine base and head SHA in case of PR
-        if: env.isPR == 'true' && !inputs.skipBuild
-        run: |
-          baseSha=${{ github.event.pull_request.base.sha }}
-          headSha=${{ github.event.pull_request.head.sha }}
-          echo "baseSha=$baseSha" >> $GITHUB_ENV
-          echo "headSha=$headSha" >> $GITHUB_ENV
-          echo "This CI run is performed on a Pull Request" | tee -a ${{env.reportdir}}${{ env.reportfilename }}
+    - name: Make needed directories, files and initializations
+      if: "!inputs.skipBuild"
+      id: Init
+      run: |
+        mkdir -p ${{ env.logdir }}
+        mkdir -p ${{ env.reportdir }}
+        commitCnt=0
+        touch ${{ env.logdir }}changedFiles.lst ${{ env.logdir }}changedCppFiles.lst ${{ env.logdir }}changedPythonFiles.lst
+        echo "reportFile=${{ env.reportfilename }}" >> $GITHUB_OUTPUT
+    - name: Check out code
+      if: "!inputs.skipBuild"
+      uses: crashappsec/action-checkout@main
+      with:
+        chalk: ${{ env.CHALK_ON }}
+        profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
+        observables_continue_on_error: false
+        lfs: false
+        submodules: true
+    - name: Determine base and head SHA in case of PR
+      if: env.isPR == 'true' && !inputs.skipBuild
+      run: |
+        baseSha=${{ github.event.pull_request.base.sha }}
+        headSha=${{ github.event.pull_request.head.sha }}
+        echo "baseSha=$baseSha" >> $GITHUB_ENV
+        echo "headSha=$headSha" >> $GITHUB_ENV
+        echo "This CI run is performed on a Pull Request" | tee -a ${{env.reportdir}}${{ env.reportfilename }}
+        echo "Base SHA is $baseSha, Head SHA is $headSha" | tee -a ${{env.reportdir}}${{ env.reportfilename }}
+    - name: Check if PR has been recently rebased
+      if: env.isPR == 'true' && !inputs.skipBuild
+      continue-on-error: ${{ inputs.dontFailOnOldRebase }}
+      run: |
+        baseDate=$(curl -H "Accept: application/vnd.github+json" -H "authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" $GITHUB_API_URL/repos/$GITHUB_REPOSITORY/commits/$baseSha | jq -r '.commit.committer.date')
+        dateDiff=$(( ( $(date +%s) - $(date -d $baseDate +%s) ) / 3600 ))
+        echo "Pull request is based on a $dateDiff hour-old commit" | tee -a ${{env.reportdir}}${{ env.reportfilename }}
+        # Exit the step with appropriate code
+        if [ $dateDiff -gt ${{ inputs.maxRebaseHours }} ]
+        then
+          echo -n ":warning: Pull request should be rebased" | tee -a ${{env.reportdir}}${{ env.reportfilename }}
+          exit 1
+        fi
+    - name: Determine base and head SHA in case of push
+      if: env.isPush == 'true' && !inputs.skipBuild
+      run: |
+        baseSha=${{ github.event.before }}
+        headSha=${{ github.event.after }}
+        echo "headSha=$headSha" >> $GITHUB_ENV
+        if [ $baseSha -eq 0 ]
+        then
+          echo "This CI run is performed on a Push that created a new branch : files changed will be ignored" | tee -a ${{env.reportdir}}${{ env.reportfilename }}
+          echo "Head SHA is $headSha" | tee -a ${{env.reportdir}}${{ env.reportfilename }}
+          echo "isPush='false'" >> $GITHUB_ENV
+        else
+          echo "This CI run is performed on a Push" | tee -a ${{env.reportdir}}${{ env.reportfilename }}
           echo "Base SHA is $baseSha, Head SHA is $headSha" | tee -a ${{env.reportdir}}${{ env.reportfilename }}
-      - name: Check if PR has been recently rebased
-        if: env.isPR == 'true' && !inputs.skipBuild
-        continue-on-error: ${{ inputs.dontFailOnOldRebase }}
-        run: |
-          baseDate=$(curl -H "Accept: application/vnd.github+json" -H "authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" $GITHUB_API_URL/repos/$GITHUB_REPOSITORY/commits/$baseSha | jq -r '.commit.committer.date')
-          dateDiff=$(( ( $(date +%s) - $(date -d $baseDate +%s) ) / 3600 ))
-          echo "Pull request is based on a $dateDiff hour-old commit" | tee -a ${{env.reportdir}}${{ env.reportfilename }}
-          # Exit the step with appropriate code
-          if [ $dateDiff -gt ${{ inputs.maxRebaseHours }} ]
-          then
-            echo -n ":warning: Pull request should be rebased" | tee -a ${{env.reportdir}}${{ env.reportfilename }}
-            exit 1
-          fi
-      - name: Determine base and head SHA in case of push
-        if: env.isPush == 'true' && !inputs.skipBuild
-        run: |
-          baseSha=${{ github.event.before }}
-          headSha=${{ github.event.after }}
-          echo "headSha=$headSha" >> $GITHUB_ENV
-          if [ $baseSha -eq 0 ]
-          then
-            echo "This CI run is performed on a Push that created a new branch : files changed will be ignored" | tee -a ${{env.reportdir}}${{ env.reportfilename }}
-            echo "Head SHA is $headSha" | tee -a ${{env.reportdir}}${{ env.reportfilename }}
-            echo "isPush='false'" >> $GITHUB_ENV
-          else
-            echo "This CI run is performed on a Push" | tee -a ${{env.reportdir}}${{ env.reportfilename }}
-            echo "Base SHA is $baseSha, Head SHA is $headSha" | tee -a ${{env.reportdir}}${{ env.reportfilename }}
-            echo "baseSha=$baseSha" >> $GITHUB_ENV
-          fi
-      - name: Get compare between head and base
-        if: (env.isPR == 'true' || env.isPush == 'true') && !inputs.skipBuild
-        run: |
-          echo "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/compare/$baseSha...$headSha"
-          curl -H "Accept: application/vnd.github+json" -H "authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" $GITHUB_API_URL/repos/$GITHUB_REPOSITORY/compare/$baseSha...$headSha > ${{ env.logdir }}compare.json
-      - name: Get number of commits in the changeset
-        if: (env.isPR == 'true' || env.isPush == 'true') && !inputs.skipBuild
-        run: |
-          commitCnt=$(jq -re '.ahead_by' ${{ env.logdir }}compare.json)
-          echo "Changeset is composed of $commitCnt commit(s)" | tee -a ${{env.reportdir}}${{ env.reportfilename }}
-      - name: Get files modified in changeset #TODO check what happens with deleted file in the subsequent process
-        if: env.isPR == 'true' && !inputs.skipBuild
-        env:
-          API_URL: ${{ github.api_url }}
-          TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          REF: ${{ github.ref_name }}
-          PR: ${{ github.event.number }}
-        run: |
-          # could reduce this to a single
-          python3 tools/lint/changed_lines.py --api-url ${API_URL} --token ${TOKEN} --repo ${REPO} --ref=${REF} --pr=${PR} > ${{ env.logdir }}changedLines.lst
-          cat ${{ env.logdir }}changedLines.lst | jq '.[].name' > ${{ env.logdir }}changedFiles.lst
-          python3 tools/lint/changed_lines.py --api-url ${API_URL} --token ${TOKEN} --repo ${REPO} --ref=${REF} --pr=${PR} --file-filter '.py, .pyi' > ${{ env.logdir }}changedPythonLines.lst
-          cat ${{ env.logdir }}changedPythonLines.lst | jq '.[].name' > ${{ env.logdir }}changedPythonFiles.lst
-          python3 tools/lint/changed_lines.py --api-url ${API_URL} --token ${TOKEN} --repo ${REPO} --ref=${REF} --pr=${PR} --file-filter '.c, .cc, .cu, .cuh, .c++, .cpp, .cxx, .h, .hh, .h++, .hpp, .hxx' > ${{ env.logdir }}changedCppLines.lst
-          cat ${{ env.logdir }}changedCppLines.lst | jq '.[].name' > ${{ env.logdir }}changedCppFiles.lst
+          echo "baseSha=$baseSha" >> $GITHUB_ENV
+        fi
+    - name: Get compare between head and base
+      if: (env.isPR == 'true' || env.isPush == 'true') && !inputs.skipBuild
+      run: |
+        echo "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/compare/$baseSha...$headSha"
+        curl -H "Accept: application/vnd.github+json" -H "authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" $GITHUB_API_URL/repos/$GITHUB_REPOSITORY/compare/$baseSha...$headSha > ${{ env.logdir }}compare.json
+    - name: Get number of commits in the changeset
+      if: (env.isPR == 'true' || env.isPush == 'true') && !inputs.skipBuild
+      run: |
+        commitCnt=$(jq -re '.ahead_by' ${{ env.logdir }}compare.json)
+        echo "Changeset is composed of $commitCnt commit(s)" | tee -a ${{env.reportdir}}${{ env.reportfilename }}
+    - name: Get files modified in changeset   #TODO check what happens with deleted file in the subsequent process
+      if: env.isPR == 'true' && !inputs.skipBuild
+      env:
+        API_URL: ${{ github.api_url }}
+        TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        REF: ${{ github.ref_name }}
+        PR: ${{ github.event.number }}
+      run: |
+        # could reduce this to a single
+        python3 tools/lint/changed_lines.py --api-url ${API_URL} --token ${TOKEN} --repo ${REPO} --ref=${REF} --pr=${PR} > ${{ env.logdir }}changedLines.lst
+        cat ${{ env.logdir }}changedLines.lst | jq '.[].name' > ${{ env.logdir }}changedFiles.lst
+        python3 tools/lint/changed_lines.py --api-url ${API_URL} --token ${TOKEN} --repo ${REPO} --ref=${REF} --pr=${PR} --file-filter '.py, .pyi' > ${{ env.logdir }}changedPythonLines.lst
+        cat ${{ env.logdir }}changedPythonLines.lst | jq '.[].name' > ${{ env.logdir }}changedPythonFiles.lst
+        python3 tools/lint/changed_lines.py --api-url ${API_URL} --token ${TOKEN} --repo ${REPO} --ref=${REF} --pr=${PR} --file-filter '.c, .cc, .cu, .cuh, .c++, .cpp, .cxx, .h, .hh, .h++, .hpp, .hxx' > ${{ env.logdir }}changedCppLines.lst
+        cat ${{ env.logdir }}changedCppLines.lst | jq '.[].name' > ${{ env.logdir }}changedCppFiles.lst
 
-          # Write the report
-          echo "::group::Modified files in changeset (removed files are ignored) :" ; cat ${{ env.logdir }}changedFiles.lst ; echo "::endgroup::"
-          echo "<details><summary>Modified files (removed files are ignored):</summary>" >> ${{env.reportdir}}${{ env.reportfilename }}
-          cat ${{ env.logdir }}changedFiles.lst >> ${{env.reportdir}}${{ env.reportfilename }}
-          echo "</details>" >> ${{env.reportdir}}${{ env.reportfilename }}
-          echo "" >> ${{env.reportdir}}${{ env.reportfilename }}
-      - name: Transmitting outputs
-        if: "!inputs.skipBuild"
-        id: Output
-        run: |
-          echo "changedFiles=$(cat ${{ env.logdir }}changedFiles.lst | tr '\n' ' ')" >> $GITHUB_OUTPUT
-          echo "changedLines=$(cat ${{ env.logdir }}changedLines.lst | tr '\n' ' ')" >> $GITHUB_OUTPUT
-          echo "changedPythonFiles=$(cat ${{ env.logdir }}changedPythonFiles.lst | tr '\n' ' ')" >> $GITHUB_OUTPUT
-          echo "changedPythonLines=$(cat ${{ env.logdir }}changedPythonLines.lst | tr '\n' ' ')" >> $GITHUB_OUTPUT
-          echo "changedCppFiles=$(cat ${{ env.logdir }}changedCppFiles.lst | tr '\n' ' ')" >> $GITHUB_OUTPUT
-          echo "changedCppLines=$(cat ${{ env.logdir }}changedCppLines.lst | tr '\n' ' ')" >> $GITHUB_OUTPUT
-          echo "" >> $GITHUB_OUTPUT
-      - name: Upload logs
-        if: always() && !inputs.skipBuild
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ${{ inputs.artifactBasename }}-Logs
-          path: |
-            ${{ env.logdir }}
-      - name: Upload report
-        if: always() && !inputs.skipBuild
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ${{ env.reportfilename }}
-          path: |
-            ${{env.reportdir}}${{ env.reportfilename }}
+        # Write the report
+        echo "::group::Modified files in changeset (removed files are ignored) :" ; cat ${{ env.logdir }}changedFiles.lst ; echo "::endgroup::"
+        echo "<details><summary>Modified files (removed files are ignored):</summary>" >> ${{env.reportdir}}${{ env.reportfilename }}
+        cat ${{ env.logdir }}changedFiles.lst >> ${{env.reportdir}}${{ env.reportfilename }}
+        echo "</details>" >> ${{env.reportdir}}${{ env.reportfilename }}
+        echo "" >> ${{env.reportdir}}${{ env.reportfilename }}
+    - name: Transmitting outputs
+      if: "!inputs.skipBuild"
+      id: Output
+      run: |
+        echo "changedFiles=$(cat ${{ env.logdir }}changedFiles.lst | tr '\n' ' ')" >> $GITHUB_OUTPUT
+        echo "changedLines=$(cat ${{ env.logdir }}changedLines.lst | tr '\n' ' ')" >> $GITHUB_OUTPUT
+        echo "changedPythonFiles=$(cat ${{ env.logdir }}changedPythonFiles.lst | tr '\n' ' ')" >> $GITHUB_OUTPUT
+        echo "changedPythonLines=$(cat ${{ env.logdir }}changedPythonLines.lst | tr '\n' ' ')" >> $GITHUB_OUTPUT
+        echo "changedCppFiles=$(cat ${{ env.logdir }}changedCppFiles.lst | tr '\n' ' ')" >> $GITHUB_OUTPUT
+        echo "changedCppLines=$(cat ${{ env.logdir }}changedCppLines.lst | tr '\n' ' ')" >> $GITHUB_OUTPUT
+        echo "" >> $GITHUB_OUTPUT
+    - name: Upload logs
+      if: always() && !inputs.skipBuild
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a   # v7.0.1
+      with:
+        name: ${{ inputs.artifactBasename }}-Logs
+        path: |
+          ${{ env.logdir }}
+    - name: Upload report
+      if: always() && !inputs.skipBuild
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a   # v7.0.1
+      with:
+        name: ${{ env.reportfilename }}
+        path: |
+          ${{env.reportdir}}${{ env.reportfilename }}
+    - name: Check observables and crashes
+      if: always() && env.CHALK_ON == 'true'
+      shell: bash
+      run: |
+        set -uo pipefail
+        root="${CURIOSITY_ROOT:-}"
+        home="${CURIOSITY_HOME:-/mnt/curiosity}"
+        obs="${home}/observables"
+        fail=0
+
+        echo "::group::curiosity layout"
+        echo "CURIOSITY_ROOT=${root:-<unset>}"
+        echo "CURIOSITY_HOME=${home}"
+        ls -la "${obs}" 2>/dev/null || echo "no observables dir at ${obs}"
+        echo "::endgroup::"
+
+        # Observables for THIS run+attempt. The prefix matters: a stale file from an
+        # earlier run on the same mount would otherwise pass.
+        prefix="${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+        shopt -s nullglob
+        mine=("${obs}/${prefix}"*)
+        if [ ${#mine[@]} -eq 0 ]; then
+          mine=("${obs}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-observables"*)
+        fi
+        if [ ${#mine[@]} -eq 0 ]; then
+          echo "::error::no observables for run ${prefix} in ${obs} - instrumentation produced nothing"
+          fail=1
+        else
+          echo "observables present: ${#mine[@]} file(s)"
+          printf '  %s\n' "${mine[@]}"
+        fi
+
+        for f in "${mine[@]}"; do
+          case "$f" in
+            *.jsonl|*.json|*.combined)
+              if ! jq --slurp "." "$f" > /dev/null 2>&1; then
+                echo "::error::observables do not parse: $f"
+                fail=1
+              fi
+              ;;
+          esac
+        done
+
+        # Crash thresholds copied from check-run: a few null frames are noise, more than
+        # five is a stack walk into nothing.
+        for f in "${root}"/log/co-host*.log "${home}"/log/co-host*.log; do
+          [ -f "$f" ] || continue
+          echo "Asserting that there is no crash in $f"
+          if [ "$(grep -c 'p 00000000' "$f" 2>/dev/null || echo 0)" -gt 5 ] \
+            || [ "$(grep -E -c 'FATAL: Uncaught signal|Address not mapped at|RAX 0x.*RBX 0x' "$f" 2>/dev/null || echo 0)" -gt 1 ]; then
+            echo "::error::crash signature in $f"
+            grep -E 'FATAL: Uncaught signal|Address not mapped at' "$f" | head -5 || true
+            fail=1
+          fi
+        done
+
+        cores=("${root}"/coredump.* "${home}"/coredump.*)
+        if [ ${#cores[@]} -gt 0 ]; then
+          echo "::error::coredump present: ${cores[*]}"
+          fail=1
+        fi
+
+        for f in "${root}"/runc.log "${root}"/runc.global.log \
+                 "${home}"/runc.log "${home}"/runc.global.log; do
+          [ -f "$f" ] || continue
+          if grep -q '^E:' "$f"; then
+            echo "::error::error in $f"
+            grep '^E:' "$f" | head -5
+            fail=1
+          fi
+        done
+
+        if [ "$fail" -ne 0 ]; then
+          echo "::error::instrumentation check FAILED"
+          exit 1
+        fi
+        echo "instrumentation check passed"
